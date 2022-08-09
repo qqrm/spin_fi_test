@@ -33,9 +33,9 @@ fn generate_map(k: u64) -> HashMap<u64, u64> {
 }
 
 fn calc_num(mut num: u64, k: u64) -> u64 {
-    (0..k).for_each(|current_iter_count| {
+    (0..k).for_each(|_| {
         if is_even(num) {
-            num = num / 2;
+            num /= 2;
         } else {
             num = num * 3 + 1;
         }
