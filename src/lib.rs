@@ -1,10 +1,17 @@
+#![feature(test)]
+#![allow(dead_code)]
+extern crate test;
+
+use simple_error::SimpleError;
 use std::collections::{HashMap, VecDeque};
+use std::sync::RwLock;
 use std::{thread, vec};
 
 fn is_even(n: u64) -> bool {
     n % 2 == 0
 }
 
+/// Precalc possible nums
 fn generate_map(k: u64) -> HashMap<u64, u64> {
     let mut map = HashMap::new();
 
@@ -32,6 +39,7 @@ fn generate_map(k: u64) -> HashMap<u64, u64> {
     map
 }
 
+/// Algorithm from task
 fn calc_num(mut num: u64, k: u64) -> u64 {
     (0..k).for_each(|_| {
         if is_even(num) {
@@ -44,9 +52,9 @@ fn calc_num(mut num: u64, k: u64) -> u64 {
     num
 }
 
+// Calc result single thread
 fn calc(data: Vec<u64>, k: u64) -> Vec<u64> {
     let mut map = generate_map(k);
-    println!("Map: {:?}", map);
 
     let mut res = vec![0u64; data.len()];
 
@@ -64,9 +72,9 @@ fn calc(data: Vec<u64>, k: u64) -> Vec<u64> {
     res
 }
 
-fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> Vec<u64> {
-    let map = generate_map(k);
-    println!("Map: {:?}", map);
+// Calc result multithread
+fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> anyhow::Result<Vec<u64>> {
+    let locked_map = RwLock::new(generate_map(k));
 
     let mut chunks = Vec::new();
     for chunk in data.chunks(chunk_size) {
@@ -75,36 +83,39 @@ fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> Vec<u64> {
         chunks.push(v);
     }
 
-    let mut handles = Vec::new();
+    let res_lock = RwLock::new(Vec::with_capacity(data.len()));
+    thread::scope(|s| {
+        for chunk in chunks {
+            s.spawn(|| {
+                let mut chunk_res = Vec::with_capacity(chunk_size);
 
-    for chunk in chunks {
-        let mut copy_map = map.clone();
-        let handle = thread::spawn(move || {
-            let mut chunk_res = Vec::with_capacity(chunk_size);
-            for num in chunk {
-                let result_for_num = copy_map.get(&num);
+                for num in chunk {
+                    if let Ok(mut map) = locked_map.write() {
+                        let val = if let Some(val) = map.get(&num) {
+                            *val
+                        } else {
+                            calc_num(num, k)
+                        };
 
-                let val = match result_for_num {
-                    Some(result) => *result,
-                    None => calc_num(num, k),
-                };
-                copy_map.insert(num, val);
-                chunk_res.push(val);
-            }
+                        map.insert(num, val);
+                        chunk_res.push(val);
+                    }
+                }
 
-            chunk_res
-        });
-        handles.push(handle);
+                if let Ok(mut res) = res_lock.write() {
+                    res.append(&mut chunk_res);
+                }
+            });
+        }
+    });
+
+    if let Ok(res) = res_lock.read() {
+        let mut res = res.clone();
+        res.sort();
+        return Ok(res);
     }
 
-    let mut res = Vec::with_capacity(data.len());
-
-    for handle in handles {
-        let mut chunk_res = handle.join().unwrap();
-        res.append(&mut chunk_res);
-    }
-
-    res
+    Err(SimpleError::new("Joining result error"))?
 }
 
 #[cfg(test)]
@@ -129,8 +140,20 @@ mod tests {
         let k = 8;
         let chunk_size = 2;
 
-        let res = calc_mt(data, k, chunk_size);
+        let res = calc_mt(data, k, chunk_size).unwrap();
 
         assert_eq!(res, expected_res);
+    }
+
+    use test::Bencher;
+
+    #[bench]
+    fn single(b: &mut Bencher) {
+        b.iter(|| test_simple());
+    }
+
+    #[bench]
+    fn mt_slow(b: &mut Bencher) {
+        b.iter(|| test_simple_mt());
     }
 }
