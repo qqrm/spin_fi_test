@@ -7,10 +7,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::RwLock;
 use std::{thread, vec};
 
-fn is_even(n: u64) -> bool {
-    n % 2 == 0
-}
-
 /// Precalc possible nums
 fn generate_map(k: u64) -> HashMap<u64, u64> {
     let mut map = HashMap::new();
@@ -39,21 +35,8 @@ fn generate_map(k: u64) -> HashMap<u64, u64> {
     map
 }
 
-/// Algorithm from task
-fn calc_num(mut num: u64, k: u64) -> u64 {
-    (0..k).for_each(|_| {
-        if is_even(num) {
-            num /= 2;
-        } else {
-            num = num * 3 + 1;
-        }
-    });
-
-    num
-}
-
 // Calc result single thread
-fn calc(data: Vec<u64>, k: u64) -> Vec<u64> {
+fn old_calc(data: Vec<u64>, k: u64) -> Vec<u64> {
     let mut map = generate_map(k);
 
     let mut res = vec![0u64; data.len()];
@@ -63,7 +46,7 @@ fn calc(data: Vec<u64>, k: u64) -> Vec<u64> {
 
         let val = match result_for_num {
             Some(result) => *result,
-            None => calc_num(*num, k),
+            None => calc_num(*num),
         };
         map.insert(*num, val);
         res[i] = val;
@@ -73,7 +56,7 @@ fn calc(data: Vec<u64>, k: u64) -> Vec<u64> {
 }
 
 // Calc result multithread
-fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> anyhow::Result<Vec<u64>> {
+fn old_calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> anyhow::Result<Vec<u64>> {
     let locked_map = RwLock::new(generate_map(k));
 
     let mut chunks = Vec::new();
@@ -94,7 +77,7 @@ fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> anyhow::Result<Vec<u64>
                         let val = if let Some(val) = map.get(&num) {
                             *val
                         } else {
-                            calc_num(num, k)
+                            calc_num(num)
                         };
 
                         map.insert(num, val);
@@ -118,6 +101,43 @@ fn calc_mt(data: Vec<u64>, k: u64, chunk_size: usize) -> anyhow::Result<Vec<u64>
     Err(SimpleError::new("Joining result error"))?
 }
 
+use rayon::prelude::*;
+const MIN_SPLIT_SIZE: usize = 100;
+const MAX_ITER: usize = 8;
+
+fn split_computation<F, T>(data: Vec<T>, f: F) -> Vec<T>
+where
+    F: Fn(T) -> T,
+    F: Sync + Send,
+    T: Copy + Sync + Send,
+{
+    if MIN_SPLIT_SIZE < data.len() {
+        return data.iter().map(|el| f(*el)).collect();
+    } else {
+        return data.par_iter().map(|el| f(*el)).collect();
+    }
+}
+
+fn is_even(n: u64) -> bool {
+    n % 2 == 0
+}
+
+/// Algorithm from task
+fn calc_num(mut num: u64) -> u64 {
+    for i in 0..MAX_ITER {
+        if 1 == num {
+            return i as u64;
+        }
+
+        if is_even(num) {
+            num /= 2;
+        } else {
+            num = num * 3 + 1;
+        }
+    }
+    num
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -126,21 +146,46 @@ mod tests {
     fn test_simple() {
         let data = vec![1, 2, 3, 100];
         let expected_res = vec![0, 1, 7, 88];
-        let k = 8;
 
-        let res = calc(data, k);
+        let res = split_computation(data, calc_num);
+        dbg!(&res);
 
         assert_eq!(res, expected_res);
     }
 
     #[test]
     fn test_simple_mt() {
+        const MIN_SPLIT_SIZE: usize = 2;
+        dbg!(&MIN_SPLIT_SIZE);
+
+        let data = vec![1, 2, 3, 100];
+        let expected_res = vec![0, 1, 7, 88];
+
+        let res = split_computation(data, calc_num);
+        dbg!(&res);
+
+        assert_eq!(res, expected_res);
+    }
+
+    #[test]
+    fn old_test_simple() {
+        let data = vec![1, 2, 3, 100];
+        let expected_res = vec![0, 1, 7, 88];
+        let k = 8;
+
+        let res = old_calc(data, k);
+
+        assert_eq!(res, expected_res);
+    }
+
+    #[test]
+    fn old_test_simple_mt() {
         let data = vec![1, 2, 3, 100];
         let expected_res = vec![0, 1, 7, 88];
         let k = 8;
         let chunk_size = 2;
 
-        let res = calc_mt(data, k, chunk_size).unwrap();
+        let res = old_calc_mt(data, k, chunk_size).unwrap();
 
         assert_eq!(res, expected_res);
     }
@@ -148,12 +193,22 @@ mod tests {
     use test::Bencher;
 
     #[bench]
+    fn old_single(b: &mut Bencher) {
+        b.iter(|| old_test_simple());
+    }
+
+    #[bench]
+    fn old_mt(b: &mut Bencher) {
+        b.iter(|| old_test_simple_mt());
+    }
+
+    #[bench]
     fn single(b: &mut Bencher) {
         b.iter(|| test_simple());
     }
 
     #[bench]
-    fn mt_slow(b: &mut Bencher) {
+    fn mt(b: &mut Bencher) {
         b.iter(|| test_simple_mt());
     }
 }
